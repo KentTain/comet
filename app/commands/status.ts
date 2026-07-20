@@ -7,6 +7,7 @@ import {
   latestCommandCheck,
   type RecordedCommandCheck,
 } from '../../domains/comet-classic/classic-command-checks.js';
+import { requiresBranchBinding } from '../../domains/comet-classic/classic-branch-binding.js';
 
 export interface ChangeStatus {
   name: string;
@@ -17,6 +18,7 @@ export interface ChangeStatus {
   phase: string | null;
   buildMode: string | null;
   isolation: string | null;
+  boundBranch: string | null;
   verifyMode: string | null;
   verifyResult: string | null;
   designDoc: string | null;
@@ -73,6 +75,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
         phase: null,
         buildMode: null,
         isolation: null,
+        boundBranch: null,
         verifyMode: null,
         verifyResult: null,
         designDoc: null,
@@ -100,6 +103,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
           phase: 'invalid',
           buildMode: projection.classic?.buildMode ?? null,
           isolation: projection.classic?.isolation ?? null,
+          boundBranch: projection.classic?.boundBranch ?? null,
           verifyMode: projection.classic?.verifyMode ?? null,
           verifyResult: projection.classic?.verifyResult ?? 'pending',
           designDoc: projection.classic?.designDoc ?? null,
@@ -133,6 +137,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
           phase: diagnostic.phase,
           buildMode: projection.classic.buildMode,
           isolation: projection.classic.isolation,
+          boundBranch: projection.classic.boundBranch,
           verifyMode: projection.classic.verifyMode,
           verifyResult: projection.classic.verifyResult,
           designDoc: projection.classic.designDoc,
@@ -162,6 +167,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
         phase: diagnostic.phase,
         buildMode: projection.classic?.buildMode ?? null,
         isolation: projection.classic?.isolation ?? null,
+        boundBranch: projection.classic?.boundBranch ?? null,
         verifyMode: projection.classic?.verifyMode ?? null,
         verifyResult: projection.classic?.verifyResult ?? 'pending',
         designDoc: projection.classic?.designDoc ?? null,
@@ -185,6 +191,7 @@ async function getActiveChanges(projectPath: string): Promise<ChangeStatus[]> {
         phase: 'invalid',
         buildMode: null,
         isolation: null,
+        boundBranch: null,
         verifyMode: null,
         verifyResult: 'pending',
         designDoc: null,
@@ -250,6 +257,11 @@ function displayStatus(changes: ChangeStatus[]): void {
       continue;
     }
     console.log(`     workflow: ${c.workflow} | build_mode: ${c.buildMode}`);
+    if (c.isolation) {
+      const branchSuffix =
+        requiresBranchBinding(c.isolation) && c.boundBranch ? ` (bound: ${c.boundBranch})` : '';
+      console.log(`     isolation: ${c.isolation}${branchSuffix}`);
+    }
     if (c.currentStep) console.log(`     run_step: ${c.currentStep}`);
     console.log(`     runtime_mode: ${c.runtimeMode}`);
     if (c.runtimeEval) {

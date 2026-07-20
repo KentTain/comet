@@ -1,7 +1,11 @@
-import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
+import {
+  driftStaleReason,
+  resolveBranchBinding,
+  unboundDetachedMessage,
+} from './classic-branch-binding.js';
 import { assertOpenSpecChangeName } from './classic-paths.js';
 import { readClassicState } from './classic-store.js';
 
@@ -18,19 +22,6 @@ export type CurrentChangeResolution =
 
 export function currentChangeFile(projectRoot: string): string {
   return path.join(projectRoot, '.comet', 'current-change.json');
-}
-
-function currentBranch(projectRoot: string): string | null {
-  try {
-    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 function changeDirectory(projectRoot: string, changeName: string): string {
@@ -84,13 +75,14 @@ function parseSelection(source: string): CurrentChangeSelection {
     throw new Error('current change selection change must be a string');
   }
   assertOpenSpecChangeName(record.change);
-  if (record.branch !== null && typeof record.branch !== 'string') {
+  // `branch` may be absent in files written by early 0.4.0-beta.6 builds.
+  if (record.branch !== undefined && record.branch !== null && typeof record.branch !== 'string') {
     throw new Error('current change selection branch must be a string or null');
   }
   return {
     version: 1,
     change: record.change,
-    branch: record.branch as string | null,
+    branch: (record.branch as string | null | undefined) ?? null,
   };
 }
 
@@ -99,10 +91,20 @@ export async function selectCurrentChange(
   changeName: string,
 ): Promise<CurrentChangeSelection> {
   await validateActiveChange(projectRoot, changeName);
+  const outcome = await resolveBranchBinding(changeDirectory(projectRoot, changeName), {
+    heal: true,
+    cwd: projectRoot,
+  });
+  if (outcome.status === 'drift') {
+    throw new Error(driftStaleReason(changeName, outcome.boundBranch, outcome.currentBranch));
+  }
+  if (outcome.status === 'unbound-detached') {
+    throw new Error(unboundDetachedMessage(changeName));
+  }
   const selection: CurrentChangeSelection = {
     version: 1,
     change: changeName,
-    branch: currentBranch(projectRoot),
+    branch: outcome.currentBranch,
   };
   const file = currentChangeFile(projectRoot);
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -140,11 +142,30 @@ export async function resolveCurrentChange(projectRoot: string): Promise<Current
     };
   }
 
-  const branch = currentBranch(projectRoot);
-  if (selection.branch !== null && branch !== selection.branch) {
+  // Resolution is a read path (the PreToolUse hook runs it on every tool
+  // call), so it never heals: heal happens on select/check/guard instead.
+  const outcome = await resolveBranchBinding(changeDirectory(projectRoot, selection.change), {
+    heal: false,
+    cwd: projectRoot,
+  });
+  if (outcome.status === 'drift') {
     return {
       status: 'stale',
-      reason: `current change '${selection.change}' was selected on branch '${selection.branch}', current branch is '${branch ?? 'detached HEAD'}'`,
+      reason: driftStaleReason(selection.change, outcome.boundBranch, outcome.currentBranch),
+    };
+  }
+  if (outcome.status === 'unbound-detached') {
+    return { status: 'stale', reason: unboundDetachedMessage(selection.change) };
+  }
+  if (outcome.status === 'ok') {
+    return { status: 'selected', selection };
+  }
+  // No bound branch governs yet (isolation unset or binding not healed):
+  // fall back to comparing against the branch recorded at selection time.
+  if (selection.branch !== null && outcome.currentBranch !== selection.branch) {
+    return {
+      status: 'stale',
+      reason: `current change '${selection.change}' was selected on branch '${selection.branch}', current branch is '${outcome.currentBranch ?? 'detached HEAD'}'`,
     };
   }
   return { status: 'selected', selection };
